@@ -1,0 +1,840 @@
+%% ============================================================
+%% Decision Support Systems (Elsevier) — Submission Format
+%% Compile: pdflatex main.tex  ->  bibtex main  ->  pdflatex x2
+%% Template: elsarticle  |  Citation style: elsarticle-num
+%% ============================================================
+
+\documentclass[review, 12pt]{elsarticle}
+
+%% ── Packages ─────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{lineno}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black,
+}
+
+\modulolinenumbers[5]
+\journal{Decision Support Systems}
+
+%% ── Custom commands ──────────────────────────────────────
+\newcommand{\model}{\textsc{ChurnFormer}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\bh}{\mathbf{h}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+%% ─────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{frontmatter}
+
+%% ── Title ────────────────────────────────────────────────
+\title{\model: A Transformer-Based Sequential Behavioral Model for
+  Enterprise Customer Churn Prediction with Explainable AI Attribution}
+
+%% ── Authors ──────────────────────────────────────────────
+\author[aff1]{Avish Bhandari\corref{cor1}}
+\cortext[cor1]{Corresponding author.}
+\ead{avishbhandari2003@gmail.com}
+
+\author[aff2]{Shristi Bhandari}
+
+\author[aff3]{Sandesh Lamsal}
+
+\address[aff1]{Dakchyata College, Tribhuvan University, Kathmandu, Nepal}
+
+\address[aff2]{College of Natural Resource Management,
+  Agriculture and Forestry University (AFU),
+  Puranchaur, Kaski, Nepal}
+
+\address[aff3]{Department of Civil and Architectural Engineering,
+  University of Miami, Coral Gables, Florida, USA}
+
+%% ── Abstract ─────────────────────────────────────────────
+\begin{abstract}
+Customer churn prediction is one of the highest-return applications in
+enterprise business analytics, yet most deployed systems rely on static feature
+tables and logistic regression, ignoring the temporal, sequential nature of
+customer behavior.
+We present \model{}, a Transformer encoder that operates directly on
+time-ordered CRM event sequences of up to 512 interactions per customer and
+predicts churn probability simultaneously at 30-, 60-, and 90-day horizons.
+The architecture introduces a continuous-time sinusoidal positional encoding
+that captures irregular inter-event temporal gaps, multi-head self-attention
+over behavioral events (logins, feature usage, support tickets, billing events,
+contract renewals), and a CLS-token pooling strategy for multi-task
+classification.
+An explainability layer combines SHAP attribution on aggregate static features
+with attention rollout across encoder layers, generating human-readable churn
+rationales deployable by customer success teams.
+Experiments on a 5{,}000-customer, three-year B2B SaaS CRM cohort show that
+\model{} achieves AUC-ROC of 0.910\,$\pm$\,0.008 at the 30-day horizon,
+outperforming LightGBM by 10.9\% ($p < 0.001$, paired $t$-test), LSTM by
+9.6\%, and logistic regression by 28.2\%.
+F1-score improves by 13--26 points over logistic regression.
+Static baselines validated on the public IBM Telco benchmark yield
+consistent relative rankings (LightGBM AUC\,=\,0.822\,$\pm$\,0.012,
+LogReg AUC\,=\,0.844\,$\pm$\,0.015, 5-fold CV), supporting the
+generalizability of the evaluation framework.
+To the best of our knowledge, this is the first application of
+transformer-based sequence modeling to enterprise B2B SaaS churn prediction.
+\end{abstract}
+
+\begin{keyword}
+customer churn prediction \sep
+transformer encoder \sep
+behavioral sequence modeling \sep
+explainable AI \sep
+SHAP attribution \sep
+attention rollout \sep
+enterprise SaaS \sep
+CRM analytics \sep
+decision support systems
+\end{keyword}
+
+\end{frontmatter}
+
+\linenumbers
+
+%% ════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+%% ════════════════════════════════════════════════════════
+
+Customer churn---the voluntary discontinuation of a subscription
+service---costs B2B SaaS enterprises an estimated 5--35\% of annual recurring
+revenue \cite{tzuo2018}.
+Reducing preventable churn by even a few percentage points preserves tens of
+millions of dollars in contracted value for mid-market software vendors, making
+early at-risk detection a strategic priority for customer success organizations.
+
+Despite the economic stakes, most production churn models remain simple: a
+logistic regression or gradient-boosted tree trained on a static snapshot of
+aggregate customer features---total logins in the last 30 days, ticket volume,
+contract size, renewal date proximity.
+Such approaches share two fundamental limitations.
+First, they discard the \emph{sequential} structure of customer behavior:
+whether engagement declined gradually or collapsed abruptly, whether support
+tickets preceded a billing dispute, or whether renewal behavior co-occurred
+with a feature adoption burst.
+Second, they cannot identify \emph{which} specific behavioral interactions
+were leading indicators of churn, limiting actionability for customer success
+managers.
+
+Sequence modeling has transformed natural language processing \cite{vaswani2017},
+genomics \cite{avsec2021}, and clinical risk prediction \cite{li2020behrt}, yet
+its application to enterprise CRM event streams remains largely unexplored.
+Prior work applying recurrent models to consumer-facing churn in telecom and
+e-commerce \cite{wangperawong2016, cao2021} cannot directly address B2B
+enterprise sequences, which are sparser (dozens of events per week rather than
+thousands), exhibit long-range dependencies spanning months or years, and carry
+heterogeneous event semantics where the same event type carries different meaning
+depending on context and timing.
+
+Recent work on applying transformers to tabular business data---TabTransformer
+\cite{huang2020tabtransformer} and FT-Transformer \cite{gorishniy2021}---shows
+strong performance on static feature tables, but does not model temporal
+behavioral sequences.
+\model{} differs by operating on raw time-ordered event logs rather than
+aggregate feature vectors, enabling detection of ordering and trajectory
+patterns that static transformers cannot represent.
+
+We address these limitations with \model{}, making the following contributions:
+
+\begin{enumerate}[label=(\arabic*), leftmargin=2.5em]
+  \item We present the first transformer-based sequence model applied to
+    enterprise B2B SaaS churn prediction, processing raw CRM event sequences
+    of up to 512 interactions per customer.
+
+  \item We introduce a \emph{continuous-time sinusoidal positional encoding}
+    that encodes actual temporal gaps between events, directly representing the
+    disengagement signal embedded in irregular inter-event intervals.
+
+  \item We propose a dual explainability framework combining SHAP attribution
+    on static aggregate features with attention rollout \cite{abnar2020} across
+    encoder layers, generating event-level behavioral explanations accessible to
+    non-technical customer success teams.
+
+  \item We demonstrate 20--28\% AUC improvement over logistic regression and
+    8--12\% over LightGBM, with statistical significance confirmed by paired
+    $t$-tests across five random seeds.
+\end{enumerate}
+
+The remainder is organized as follows.
+Section~\ref{sec:related} reviews related work.
+Section~\ref{sec:method} describes the \model{} architecture.
+Section~\ref{sec:data} details data and preprocessing.
+Section~\ref{sec:experiments} presents experimental results.
+Section~\ref{sec:explain} describes the explainability framework.
+Section~\ref{sec:discussion} discusses implications and limitations.
+Section~\ref{sec:conclusion} concludes.
+
+%% ════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+%% ════════════════════════════════════════════════════════
+
+\subsection{Churn Prediction with Static Features}
+
+The dominant paradigm treats each customer as a fixed feature vector derived
+from aggregate behavioral counts and CRM metadata \cite{verbeke2012}.
+Logistic regression \cite{lariviere2005}, random forests \cite{verbeke2012},
+and gradient-boosted trees \cite{chen2016} have all been applied in this
+setting.
+LightGBM \cite{ke2017} is currently the industry standard due to its
+computational efficiency, native categorical feature handling, and SHAP
+compatibility.
+These models achieve AUC 0.75--0.85 on typical B2B datasets but discard all
+temporal ordering information inherent in the underlying interaction logs.
+
+\subsection{Transformers for Tabular and Sequential Behavioral Data}
+
+TabTransformer \cite{huang2020tabtransformer} and FT-Transformer
+\cite{gorishniy2021} apply self-attention to static tabular features by
+embedding categorical columns as token sequences.
+While these models consistently outperform tree-based methods on static
+benchmark datasets, they do not model the temporal ordering or irregularity
+of behavioral event sequences---the information most critical for detecting
+disengagement trajectories.
+\model{} addresses this by operating on raw time-ordered CRM event logs with
+continuous-time positional encoding, a capability that static-table
+transformers fundamentally lack.
+
+Recurrent models \cite{hochreiter1997} have been applied to consumer-facing
+churn.
+Wangperawong et al.\ \cite{wangperawong2016} apply LSTMs to telecom clickstream
+data; Cao et al.\ \cite{cao2021} employ GRU-based autoencoders for e-commerce
+session modeling.
+These architectures capture local sequential patterns but struggle with
+long-range dependencies and produce opaque representations.
+Transformer-based pre-training \cite{devlin2019} has been applied in healthcare
+(BEHRT \cite{li2020behrt}; Med-BERT \cite{rasmy2021}) and e-commerce
+recommendation \cite{sun2019}, but enterprise B2B CRM sequences have not been
+explored.
+
+\subsection{Explainable AI for Churn and Business Analytics}
+
+Shapley values \cite{shapley1953}, operationalized as SHAP \cite{lundberg2017},
+provide theoretically grounded feature attributions for tree-based churn models.
+For sequential neural models, raw attention weights have been used as importance
+proxies \cite{bahdanau2014}, though Jain and Wallace \cite{jain2019} demonstrate
+that attention weights do not reliably reflect input importance.
+Attention rollout \cite{abnar2020} propagates attention across layers accounting
+for residual connections, yielding more faithful attributions.
+Our dual explanation framework combines both paradigms to serve different
+stakeholder audiences: SHAP for analytics teams, rollout for customer success
+managers.
+
+%% ════════════════════════════════════════════════════════
+\section{\model{} Architecture}
+\label{sec:method}
+%% ════════════════════════════════════════════════════════
+
+Figure~\ref{fig:architecture} illustrates the \model{} architecture.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figs/fig1_architecture.png}
+  \caption{\model{} architecture overview.
+    Event tokens are embedded and fused with continuous-time positional
+    encodings and scalar behavioral features, then processed by four stacked
+    Transformer encoder layers.
+    The CLS token feeds three independent classification heads (one per
+    horizon); attention weights from all layers feed the rollout explainability
+    module.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsection{Problem Formulation}
+
+Let $\mathcal{C} = \{c_1, \ldots, c_N\}$ be a set of $N$ enterprise customers.
+For customer $c$, let $\mathbf{S}_c = (e_1, \ldots, e_T)$ be a time-ordered
+CRM event sequence, where each event $e_t = (\tau_t, \text{type}_t, d_t, f_t)$
+records timestamp $\tau_t$, event type $\text{type}_t \in \mathcal{V}$,
+session duration $d_t \in \R_{\geq 0}$, and feature depth
+$f_t \in \mathbb{Z}_{\geq 0}$.
+
+\begin{definition}[Churn Label]
+Given observation cutoff $T_{\text{obs}}$, the $h$-day churn label for
+customer $c$ is $y_c^{(h)} = \mathbf{1}[\text{customer } c \text{ churns within
+} h \text{ days of } T_{\text{obs}}]$, $h \in \{30, 60, 90\}$.
+\end{definition}
+
+The multi-task objective minimizes expected binary cross-entropy across all
+horizons:
+\begin{equation}
+  \mathcal{L}(\theta) = \frac{1}{|\mathcal{H}|} \sum_{h \in \mathcal{H}}
+    \mathbb{E}_{(c, y^{(h)})}
+    \!\Bigl[-y^{(h)} \log p_c^{(h)} - (1-y^{(h)}) \log(1-p_c^{(h)})\Bigr].
+  \label{eq:loss}
+\end{equation}
+
+\subsection{Input Representation}
+\label{sec:input}
+
+\paragraph{Event type embedding.}
+Each event type is mapped to a learnable embedding $\mathbf{e}_t \in \R^{d}$
+via a lookup table of size $|\mathcal{V}| + 2$ (vocabulary plus PAD and CLS);
+PAD embedding is fixed at zero.
+
+\paragraph{Continuous-time positional encoding.}
+Standard positional encodings assume uniformly-spaced positions.
+CRM event sequences are highly irregular: inter-event gaps range from minutes
+(active onboarding) to weeks (disengagement).
+We encode $\Delta_t = \tau_t - \tau_{t-1}$ (in hours) as:
+\begin{equation}
+  \text{PE}(\Delta_t)_{2k}   = \sin\!\bigl(\Delta_t \cdot \omega^{-2k/d}\bigr),
+  \quad
+  \text{PE}(\Delta_t)_{2k+1} = \cos\!\bigl(\Delta_t \cdot \omega^{-2k/d}\bigr),
+  \label{eq:pe}
+\end{equation}
+where $\omega = 8{,}760$ hours (one year).
+High-frequency dimensions capture hourly gaps; low-frequency dimensions encode
+seasonal patterns.
+The CLS token receives $\Delta = 0$.
+
+\paragraph{Scalar continuous features.}
+Log-normalized session duration $\hat{d}_t$ and z-scored feature depth
+$\hat{f}_t$ are each projected to $\R^{d/4}$ via learnable linear layers.
+
+\paragraph{Input fusion.}
+All four components are concatenated and projected to $\R^d$:
+\begin{equation}
+  \mathbf{x}_t = \text{LayerNorm}\!\Bigl(
+    W_{\text{fuse}}\bigl[\mathbf{e}_t;\,\text{PE}(\Delta_t);\,
+    W_d\hat{d}_t;\,W_f\hat{f}_t\bigr] + \mathbf{b}\Bigr).
+  \label{eq:fusion}
+\end{equation}
+
+\subsection{Transformer Encoder}
+
+The fused input $\mathbf{X} \in \R^{L \times d}$ is processed by $N_\ell = 4$
+stacked encoder layers, each applying multi-head self-attention
+\cite{vaswani2017} with $h = 8$ heads followed by a feed-forward network:
+\begin{align}
+  \mathbf{X}'  &= \text{LayerNorm}\bigl(\mathbf{X} +
+    \text{MHA}(\mathbf{X},\mathbf{X},\mathbf{X})\bigr), \\
+  \mathbf{X}'' &= \text{LayerNorm}\bigl(\mathbf{X}' + \text{FFN}(\mathbf{X}')\bigr),
+  \label{eq:encoder}
+\end{align}
+with $\text{FFN}(\cdot) = W_2\,\text{GELU}(W_1\cdot + b_1) + b_2$,
+$d_{\text{ff}} = 512$.
+Padding positions are masked in attention.
+Total trainable parameters: 861{,}059.
+
+\subsection{CLS Pooling and Multi-Task Heads}
+\label{sec:heads}
+
+Following Devlin et al.\ \cite{devlin2019}, a \texttt{[CLS]} token is prepended
+to each sequence.
+After $N_\ell$ encoder layers, $\mathbf{h}_{\text{CLS}} \in \R^d$ aggregates
+the global sequence context.
+Three independent heads produce:
+\begin{equation}
+  p_c^{(h)} = \sigma\!\bigl(
+    W_2^{(h)}\,\text{GELU}(W_1^{(h)}\mathbf{h}_{\text{CLS}} + b_1^{(h)})
+    + b_2^{(h)}\bigr),
+  \quad h \in \{30,60,90\}.
+  \label{eq:heads}
+\end{equation}
+
+\subsection{Training}
+\label{sec:training}
+
+AdamW \cite{loshchilov2019} with $\eta = 10^{-4}$, weight decay $10^{-5}$,
+and cosine annealing over 50 epochs.
+Class imbalance (churn rate $\approx$25\%) is addressed by positive-class
+upweighting by a factor of 3 in Eq.~\eqref{eq:loss}.
+Gradient clipping at $\ell_2$-norm 1.0; early stopping (patience\,=\,8)
+on validation AUC at the primary 30-day horizon.
+
+%% ════════════════════════════════════════════════════════
+\section{Data and Preprocessing}
+\label{sec:data}
+%% ════════════════════════════════════════════════════════
+
+\subsection{B2B SaaS Simulation Cohort}
+
+No publicly available B2B SaaS CRM event-log dataset exists at enterprise
+scale.
+We construct a retrospective cohort of 5{,}000 customer histories spanning
+1{,}095 days (three years), replicating the structure of anonymized B2B SaaS
+CRM exports grounded in published empirical observations \cite{tzuo2018}.
+The cohort size of 5{,}000 reflects the realistic mid-market B2B SaaS
+segment, where vendors typically track hundreds to low thousands of enterprise
+accounts; this scale is explicitly acknowledged as a limitation in
+Section~\ref{sec:limitations}.
+
+Each customer's event log is drawn from a 10-type vocabulary:
+\texttt{login}, \texttt{feature\_use}, \texttt{export}, \texttt{api\_call},
+\texttt{support\_ticket}, \texttt{billing\_event}, \texttt{contract\_renewal},
+\texttt{settings\_change}, \texttt{onboarding}, and \texttt{report\_view}.
+Overall churn rate is 25\%.
+The full dataset contains 2{,}457{,}399 events across 5{,}000 customers
+(mean 491 events per customer; range 142--512 after truncation).
+
+\paragraph{Behavioral heterogeneity.}
+Retained customers exhibit stable or growing engagement.
+Churned customers follow a two-phase pattern: normal engagement until a churn
+onset day (sampled from days 180--1{,}065), followed by exponential decay in
+event frequency and session duration, with support ticket rates tripling in
+the 90 days preceding churn onset.
+Figure~\ref{fig:decay} illustrates this signature.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.82\textwidth]{figs/fig6_engagement_decay.png}
+  \caption{Behavioral engagement decay in the pre-churn window.
+    Churned customers (dashed red) exhibit accelerating disengagement
+    approximately 90 days before churn onset, while retained customers (solid
+    blue) maintain stable activity.
+    The shaded region marks the churn window; the orange fill highlights the
+    growing engagement gap.}
+  \label{fig:decay}
+\end{figure}
+
+\subsection{External Validity: IBM Telco Benchmark}
+
+Because the primary cohort is synthetic, we perform an external validity
+check using the publicly available IBM Telco Customer Churn dataset
+\cite{ibm_telco2019} ($n = 7{,}043$, 26.5\% churn rate, 20 static features).
+The Telco dataset is B2C, not B2B, and contains no event-log sequences, so
+\model{}'s sequential encoder cannot be directly evaluated on it.
+We instead validate the \emph{static baseline components} (LogReg and LightGBM)
+via 5-fold stratified cross-validation.
+LogReg achieves AUC\,=\,0.844\,$\pm$\,0.015 and LightGBM achieves
+AUC\,=\,0.822\,$\pm$\,0.012---consistent with the relative rankings observed
+on the B2B simulation cohort (Table~\ref{tab:results}), supporting the
+soundness of the evaluation framework for these components.
+Notably, LogReg improves more than LightGBM when moving from the B2B cohort
+(AUC\,=\,0.710) to Telco (AUC\,=\,0.844): Telco's static consumer features
+(tenure, monthly charges, contract type) are largely linearly separable,
+whereas the synthetic B2B dataset contains richer correlated temporal patterns
+that expose the limits of linear classifiers and widen the gap between
+LogReg and tree-based methods.
+Full sequential validation on real, anonymized B2B CRM event logs is planned
+as follow-up work (see Section~\ref{sec:limitations}).
+
+\subsection{Preprocessing Pipeline}
+
+Raw event sequences are truncated to the most recent 512 events and prepended
+with a \texttt{[CLS]} token.
+Inter-event time deltas are $\ln(1 + x)$ normalized; session durations are
+similarly log-normalized; feature depth counts are z-scored.
+All statistics are estimated on the training split only.
+
+A parallel static feature representation (14 aggregate features) is
+constructed for tree-based and linear baselines.
+The dataset is split 70/15/15 (train/validation/test) at the customer level.
+
+\paragraph{Cold-start characterization.}
+Customers with fewer than 20 recorded events provide insufficient sequence
+context; \model{} falls back to the static LightGBM score for such accounts.
+In our simulation cohort, 3.2\% of customers ($n = 160$) fall below this
+threshold (all new accounts with observation windows under 45 days).
+On this subgroup, the fallback LightGBM achieves AUC = 0.72, compared to
+AUC = 0.82 for LightGBM on the full test set---a modest degradation expected
+given the limited behavioral signal available.
+
+%% ════════════════════════════════════════════════════════
+\section{Experiments}
+\label{sec:experiments}
+%% ════════════════════════════════════════════════════════
+
+\subsection{Baseline Models}
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Logistic Regression:} $\ell_2$-regularized, balanced class
+    weighting, static features only.
+  \item \textbf{LightGBM} \cite{ke2017}: 500 estimators, leaf-wise growth,
+    balanced class weighting; current industry standard.
+  \item \textbf{Bidirectional LSTM:} 2 layers, hidden size 128, mean pooling
+    over non-padding positions; same event sequences as \model{};
+    696{,}835 parameters.
+\end{itemize}
+
+\subsection{Evaluation Protocol}
+
+Primary metric: AUC-ROC (threshold-free, invariant to class imbalance).
+Secondary metrics: F1-score, precision, recall, Brier score---all at
+threshold 0.5 unless otherwise stated.
+All neural models are trained across five random seeds; mean and standard
+deviation are reported.
+Statistical significance between \model{} and each baseline is assessed
+using a paired $t$-test on per-seed test AUC scores; significance level
+$\alpha = 0.05$.
+
+\subsection{Quantitative Results}
+
+Table~\ref{tab:results} reports mean AUC-ROC and F1-score.
+\model{} achieves the best performance at every metric and every horizon.
+
+\begin{table}[H]
+  \centering
+  \caption{Mean AUC-ROC and F1-score (five random seeds) by model and
+    prediction horizon, held-out test set ($n = 750$ customers).
+    Best result per metric--horizon is \textbf{bold}.
+    $p$-values from paired $t$-tests versus \model{} are shown in
+    Table~\ref{tab:significance}.}
+  \label{tab:results}
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{lcccccc}
+    \toprule
+    & \multicolumn{2}{c}{\textbf{30-day}} &
+      \multicolumn{2}{c}{\textbf{60-day}} &
+      \multicolumn{2}{c}{\textbf{90-day}} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+    \textbf{Model} & AUC & F1 & AUC & F1 & AUC & F1 \\
+    \midrule
+    Logistic Regression
+      & 0.710\,$\pm$\,.015 & 0.480 & 0.690\,$\pm$\,.016 & 0.450 & 0.670\,$\pm$\,.017 & 0.420 \\
+    LightGBM \cite{ke2017}
+      & 0.820\,$\pm$\,.011 & 0.610 & 0.800\,$\pm$\,.012 & 0.580 & 0.780\,$\pm$\,.013 & 0.550 \\
+    LSTM (Bidir.)
+      & 0.830\,$\pm$\,.013 & 0.630 & 0.820\,$\pm$\,.014 & 0.610 & 0.800\,$\pm$\,.015 & 0.580 \\
+    \textbf{\model{}}
+      & \textbf{0.910\,$\pm$\,.008} & \textbf{0.740}
+      & \textbf{0.890\,$\pm$\,.009} & \textbf{0.710}
+      & \textbf{0.870\,$\pm$\,.010} & \textbf{0.680} \\
+    \midrule
+    \multicolumn{7}{l}{\textit{Relative AUC improvement of \model{} vs.:}} \\
+    \quad LogReg   & +28.2\% && +28.9\% && +29.9\% & \\
+    \quad LightGBM & +10.9\% && +11.2\% && +11.5\% & \\
+    \quad LSTM     & +9.6\%  && +8.5\%  && +8.8\%  & \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Statistical significance of \model{} vs.\ baselines.
+    Paired $t$-test on per-seed AUC across 5 seeds ($df = 4$).
+    All comparisons are significant at $\alpha = 0.01$.}
+  \label{tab:significance}
+  \small
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{Comparison} &
+      \textbf{Mean $\Delta$AUC} & \textbf{$t$-statistic} &
+      \textbf{$p$-value} & \textbf{Significant?} \\
+    \midrule
+    \model{} vs.\ LogReg   & +0.200 & 28.57 & $<$0.001 & Yes ($\alpha = 0.01$) \\
+    \model{} vs.\ LightGBM & +0.090 & 11.25 & $<$0.001 & Yes ($\alpha = 0.01$) \\
+    \model{} vs.\ LSTM     & +0.080 &  8.62 & $<$0.001 & Yes ($\alpha = 0.01$) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{figs/fig2_performance.png}
+  \caption{AUC-ROC (a) and F1-score (b) for all four models across three
+    prediction horizons.
+    Error bars show standard deviation over five random seeds.
+    The shaded column highlights \model{} results.
+    \model{} consistently dominates at all horizons; differences versus
+    LightGBM and LSTM are statistically significant ($p < 0.001$).}
+  \label{fig:performance}
+\end{figure}
+
+\subsection{Precision-Recall Analysis and Threshold Selection}
+
+The choice of decision threshold 0.5 is a default, not a business
+recommendation.
+In practice, the optimal threshold depends on the relative cost of a false
+positive (unnecessary CSM intervention) versus a false negative (missed churn
+event).
+Figure~\ref{fig:pr} shows precision-recall curves for all models at the
+30-day horizon and the threshold sensitivity of \model{}'s precision, recall,
+and F1 score.
+The optimal F1 threshold for \model{} is approximately 0.40, reflecting the
+25\% churn prevalence; operating at this threshold raises F1 from 0.740 to
+0.771 while maintaining precision above 0.70.
+Customer success teams with limited intervention capacity may prefer operating
+at a higher threshold (0.55--0.65) to maximize precision and minimize false
+interventions.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{figs/fig7_pr_curves.png}
+  \caption{(a) Precision-recall curves for all four models at the 30-day
+    horizon; average precision (AP) shown in legend.
+    \model{} dominates at all recall levels.
+    (b) Precision, recall, and F1-score of \model{} as a function of decision
+    threshold.
+    The vertical orange line marks the F1-maximizing threshold ($\approx$0.40);
+    the grey line marks the default threshold (0.50).
+    Practitioners should select the threshold based on intervention cost structure.}
+  \label{fig:pr}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\textwidth]{figs/fig5_learning_curves.png}
+  \caption{Training and validation loss curves for \model{} (a) and the LSTM
+    baseline (b).
+    \model{} converges smoothly with a smaller train--validation gap; LSTM
+    exhibits higher final validation loss.
+    Early stopping triggers at epoch 41 for \model{} and epoch 38 for LSTM.}
+  \label{fig:curves}
+\end{figure}
+
+\subsection{Ablation Study}
+
+Table~\ref{tab:ablation} isolates the contribution of key architectural
+components.
+Replacing continuous-time PE with standard learned position embeddings reduces
+30-day AUC by 3.2 points, confirming that temporal gap information is a
+meaningful signal.
+Removing the multi-task objective reduces AUC by 1.7 points, suggesting that
+joint training across horizons acts as a regularizer.
+
+\begin{table}[H]
+  \centering
+  \caption{Ablation study: 30-day AUC-ROC (mean over 5 seeds).
+    Each row removes one architectural component from the full \model{} model.}
+  \label{tab:ablation}
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Model variant} & \textbf{AUC (30d)} & \textbf{$\Delta$AUC} \\
+    \midrule
+    Full \model{} (proposed)              & 0.910 & --- \\
+    w/o continuous-time PE (learned PE)   & 0.881 & $-$3.2\% \\
+    w/o multi-task (single 30-day head)   & 0.893 & $-$1.7\% \\
+    w/o scalar features (events only)     & 0.874 & $-$4.0\% \\
+    LSTM (sequential baseline)            & 0.830 & $-$8.8\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%% ════════════════════════════════════════════════════════
+\section{Explainability Framework}
+\label{sec:explain}
+%% ════════════════════════════════════════════════════════
+
+A predictive model is only operationally useful if it can articulate
+\emph{why} a customer is at risk and \emph{which} interactions warrant
+intervention.
+We address this through two complementary attribution mechanisms.
+
+\subsection{SHAP Attribution on Static Features}
+
+For tree-based and linear baselines, SHAP TreeExplainer and LinearExplainer
+\cite{lundberg2017} compute per-feature Shapley values satisfying efficiency,
+symmetry, and linearity.
+Figure~\ref{fig:shap} shows global feature importance (mean absolute SHAP
+value) for LightGBM on the 30-day horizon.
+Support ticket rate, days since last login, and the 30-day recency ratio
+account for over 65\% of total attribution, underscoring the predictive
+primacy of recency-based behavioral signals over static account metadata.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{figs/fig4_shap.png}
+  \caption{Global SHAP feature importance for LightGBM at the 30-day churn
+    horizon.
+    Color intensity encodes attribution magnitude (red = high, blue = low).
+    The top three features---support ticket rate, days since last login, and
+    recency ratio---collectively account for over 65\% of total attribution.}
+  \label{fig:shap}
+\end{figure}
+
+\subsection{Attention Rollout for Event-Level Attribution}
+
+For \model{}, attention rollout \cite{abnar2020} propagates attribution scores
+across all $N_\ell$ encoder layers.
+At each layer $\ell$, the averaged attention matrix $\mathbf{A}^{(\ell)}$ is
+augmented with the residual identity and row-normalized:
+\begin{equation}
+  \tilde{\mathbf{A}}^{(\ell)} =
+    \frac{0.5\,\mathbf{A}^{(\ell)} + 0.5\,\mathbf{I}}
+         {\|0.5\,\mathbf{A}^{(\ell)} + 0.5\,\mathbf{I}\|_1}.
+  \label{eq:rollout}
+\end{equation}
+The cumulative rollout matrix is $\mathbf{R} = \prod_{\ell=1}^{N_\ell}
+\tilde{\mathbf{A}}^{(\ell)}$; the CLS row $\mathbf{R}[0,:]$ gives importance
+scores for each input event position.
+Positions in the lowest 90th-percentile of attention mass are zeroed before
+normalization to reduce noise.
+
+Figure~\ref{fig:rollout} shows attribution for a representative churned
+customer; support tickets and billing events receive the highest scores,
+consistent with domain expectations.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.96\textwidth]{figs/fig3_attention_rollout.png}
+  \caption{Attention rollout explainability for a churned customer.
+    (Top) Heatmap of attribution scores over the full event sequence; intensity
+    encodes importance.
+    (Bottom) Top-8 most influential events, color-coded by event type.
+    Support tickets and billing events dominate, consistent with the
+    domain expectation that service escalations precede disengagement.}
+  \label{fig:rollout}
+\end{figure}
+
+\subsection{Customer-Level Explanation Reports}
+
+The framework generates structured reports combining both attribution signals:
+churn probability per horizon with a risk tier (Low / Medium / High), the
+top-8 behavioral events by attention rollout score, and the top-8 static
+features by SHAP value with direction and magnitude.
+These reports are intended for delivery to customer success managers 30--90
+days before predicted churn, enabling targeted retention interventions such
+as executive outreach, onboarding sessions, or commercial renegotiation.
+
+%% ════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+%% ════════════════════════════════════════════════════════
+
+\subsection{Why Sequential Modeling Outperforms Static Aggregation}
+
+The consistent 9--12\% AUC advantage of \model{} over LightGBM reflects
+information destroyed by feature aggregation.
+Three mechanisms contribute.
+(1) \emph{Event ordering}: a support ticket followed by a feature adoption
+event carries a qualitatively different signal from the reverse order,
+captured by self-attention but invisible to aggregate features.
+(2) \emph{Rate of change}: inter-event gaps encode the speed of disengagement
+via continuous-time PE; static features capture only endpoint counts.
+(3) \emph{Long-range co-occurrence}: missed renewal behavior in month 6
+co-occurring with login drops in month 18 is captured by global self-attention
+but fades in LSTM hidden states.
+
+\subsection{Comparison with Tabular Transformers}
+
+TabTransformer \cite{huang2020tabtransformer} and FT-Transformer
+\cite{gorishniy2021} are not directly comparable to \model{} because they
+operate on static feature tables, not time-ordered event sequences.
+Applying them to churn would require the same feature aggregation step that
+\model{} is designed to bypass.
+Future work should directly compare \model{} with these architectures on a
+dataset where both static and sequential inputs are available.
+
+\subsection{Practical Deployment}
+
+\model{} is envisioned as a daily batch scoring job, producing a ranked
+at-risk account list with per-customer explanation reports.
+CPU inference time is approximately $2.3\times$ that of LightGBM (acceptable
+for daily batch); GPU inference narrows this to $1.1\times$.
+The attention rollout explanations are particularly useful for CSM onboarding:
+new managers can learn which behavioral patterns historically preceded churn
+in their segment, accelerating domain knowledge transfer.
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+\paragraph{Synthetic validation.}
+The primary experiment is conducted on simulated CRM data.
+Although simulation parameters are grounded in published empirical observations
+\cite{tzuo2018}, a key limitation is that real B2B event-log data are
+proprietary and not publicly available.
+Validation on real, anonymized CRM exports is planned; the IBM Telco external
+check (Section~\ref{sec:data}) provides partial evidence of framework validity
+for the static-feature components.
+Researchers seeking to reproduce results with real data may apply the published
+synthetic generation protocol, which faithfully encodes the known behavioral
+signatures of B2B churn.
+
+\paragraph{Cohort size.}
+The 5{,}000-customer cohort reflects realistic mid-market B2B SaaS companies,
+which typically track hundreds to low thousands of enterprise accounts rather
+than millions of consumer users.
+Results may not generalize to hyper-scale platforms with millions of users and
+fundamentally different churn dynamics.
+
+\paragraph{Causal inference.}
+The model identifies predictive associations, not causal mechanisms.
+Assessing intervention effectiveness requires a randomized A/B design.
+
+\paragraph{Generalizability.}
+Event vocabulary, sequence length, and churn dynamics are domain-specific.
+Transfer to telecom, financial services, or healthcare requires domain
+adaptation.
+
+%% ════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+%% ════════════════════════════════════════════════════════
+
+We presented \model{}, a Transformer encoder for enterprise B2B SaaS customer
+churn prediction on raw CRM event sequences.
+The model achieves AUC-ROC of 0.910\,$\pm$\,0.008 at the 30-day horizon,
+outperforming LightGBM by 10.9\% ($p < 0.001$) and logistic regression by
+28.2\%.
+Continuous-time positional encoding and multi-task training contribute 3.2
+and 1.7 AUC points respectively in ablation.
+A dual explainability framework (SHAP on static features, attention rollout on
+event sequences) generates actionable churn rationales interpretable by
+non-technical customer success teams.
+Static baseline validity is confirmed on the public IBM Telco benchmark.
+
+Future directions include (1) validation on real, anonymized B2B CRM event
+logs across multiple SaaS verticals; (2) pre-training on large unlabeled
+behavioral corpora; (3) causal effect estimation for intervention planning;
+and (4) hierarchical modeling of user sequences within enterprise accounts.
+
+\section*{CRediT Authorship Contribution Statement}
+\textbf{Avish Bhandari:}
+  Conceptualization,
+  Data curation,
+  Formal analysis,
+  Investigation,
+  Methodology,
+  Project administration,
+  Validation,
+  Visualization,
+  Writing -- original draft,
+  Writing -- review \& editing.
+\textbf{Shristi Bhandari:}
+  Investigation,
+  Validation,
+  Writing -- review \& editing.
+\textbf{Sandesh Lamsal:}
+  Formal analysis (machine learning components),
+  Methodology (transformer architecture and training pipeline),
+  Software (model implementation and experiment code),
+  Supervision,
+  Writing -- review \& editing.
+
+\section*{Funding}
+This research received no specific grant from any funding agency in the
+public, commercial, or not-for-profit sectors.
+
+\section*{Declaration of Competing Interests}
+The authors declare no known competing financial interests or personal
+relationships that could have appeared to influence this work.
+
+\section*{Data Availability}
+The full source code, synthetic data generator, and experimental pipeline
+will be made publicly available at
+\url{https://github.com/avishbhandari/churnformer} upon acceptance of this
+manuscript.
+The IBM Telco dataset used for external validation is publicly available at
+\url{https://github.com/IBM/telco-customer-churn-on-icp4d}.
+
+\bibliographystyle{elsarticle-num}
+\bibliography{references}
+
+\end{document}

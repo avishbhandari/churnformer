@@ -1,0 +1,69 @@
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  synthetic_dir: data/synthetic
+  max_seq_len: 512
+  horizons: [30, 60, 90]         # churn prediction horizons in days
+  train_split: 0.70
+  val_split: 0.15
+  test_split: 0.15
+  seed: 42
+
+  # Synthetic generation parameters
+  synthetic:
+    n_customers: 5000
+    churn_rate: 0.25
+    observation_window_days: 1095  # 3 years
+
+  # Event types in the behavioral sequence
+  event_types:
+    - login
+    - feature_use
+    - export
+    - api_call
+    - support_ticket
+    - billing_event
+    - contract_renewal
+    - settings_change
+    - onboarding
+    - report_view
+
+model:
+  churnformer:
+    event_vocab_size: 12           # 10 event types + PAD + CLS
+    d_model: 128
+    n_heads: 8
+    n_layers: 4
+    d_ff: 512
+    dropout: 0.1
+    max_seq_len: 512
+    n_horizons: 3                  # 30 / 60 / 90-day heads
+
+  lstm:
+    hidden_size: 128
+    n_layers: 2
+    dropout: 0.1
+
+training:
+  batch_size: 64
+  epochs: 50
+  lr: 1e-4
+  weight_decay: 1e-5
+  patience: 8                      # early stopping
+  grad_clip: 1.0
+  pos_weight: 3.0                  # class imbalance upweight for churn class
+  device: auto                     # auto | cpu | cuda | mps
+
+evaluation:
+  metrics: [auc, f1, precision, recall, brier]
+  primary_metric: auc
+
+explainability:
+  n_background_samples: 100
+  n_top_features: 15
+  attention_rollout: true
+
+paths:
+  checkpoints: experiments/results/checkpoints
+  logs: experiments/results/logs
+  figures: experiments/results/figures
